@@ -4,13 +4,12 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"trezor-encryption/trezor"
-	"trezor-encryption/trezor/messages"
-
 	"github.com/golang/protobuf/proto"
 	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
+	"github.com/rendaw/go-trezor"
+	"github.com/rendaw/go-trezor/messages"
 )
 
 const space = 4
