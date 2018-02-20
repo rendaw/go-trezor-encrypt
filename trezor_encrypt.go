@@ -17,6 +17,10 @@ import (
 
 const space = 4
 
+func GetAddressN() []uint32 {
+	return []uint32{10, 0}
+}
+
 //Show a confirmation dialog
 func DoCheck(message string, okayText string, cancelText string) (bool, error) {
 	okay := false
@@ -337,14 +341,6 @@ func DoPin(message string) (bool, string, error) {
 // For compatibility with other Trezor software - the data to encrypt is prepended with its length (4 bytes) and padded
 // to a length multiple of 16.  Additionally, the BIP32 key derivation path is 10, 0.
 func EncryptWithDevice(device trezor.Transport, encrypt bool, prompt string, key string, value []byte) ([]byte, error) {
-	{
-		device.Write(&messages.Initialize{})
-		_, _, err := device.Read()
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	var padded []byte
 	if encrypt {
 		padded = make([]byte, uint32((4+len(value))/16+1)*16)
@@ -355,7 +351,7 @@ func EncryptWithDevice(device trezor.Transport, encrypt bool, prompt string, key
 	}
 	t := true
 	err := device.Write(&messages.CipherKeyValue{
-		AddressN:     []uint32{10, 0},
+		AddressN:     GetAddressN(),
 		Key:          &key,
 		Value:        padded[:],
 		Encrypt:      &encrypt,
@@ -383,13 +379,22 @@ func EncryptWithDevice(device trezor.Transport, encrypt bool, prompt string, key
 				return nil, err
 			}
 			if done {
-				device.Write(&messages.PinMatrixAck{Pin: &value})
+				err = device.Write(&messages.PinMatrixAck{Pin: &value})
+				if err != nil {
+					return nil, err
+				}
 			} else {
-				device.Write(&messages.Cancel{})
+				err = device.Write(&messages.Cancel{})
+				if err != nil {
+					return nil, err
+				}
 				return nil, nil
 			}
 		} else if messageType == messages.MessageType_MessageType_ButtonRequest {
-			device.Write(&messages.ButtonAck{})
+			err = device.Write(&messages.ButtonAck{})
+			if err != nil {
+				return nil, err
+			}
 		} else if messageType == messages.MessageType_MessageType_CipheredKeyValue {
 			var ciphered messages.CipheredKeyValue
 			proto.Unmarshal(message, &ciphered)
@@ -402,7 +407,7 @@ func EncryptWithDevice(device trezor.Transport, encrypt bool, prompt string, key
 			}
 			return clipped, nil
 		} else {
-			return nil, fmt.Errorf("Unexpected response from trezor [%d]", messageType)
+			return nil, fmt.Errorf("Unexpected response from Trezor [%d]", messageType)
 		}
 	}
 }
@@ -428,19 +433,103 @@ func Encrypt(encrypt bool, prompt string, key string, value []byte) ([]byte, err
 			break
 		}
 	}
+	var result []byte
 	device := devices[0]
-	err := device.Open()
+	TrezorDo(device, func(features messages.Features) error {
+		var err error
+		result, err = EncryptWithDevice(device, encrypt, prompt, key, value)
+		return err
+	})
+	return result, nil
+}
+
+func GetPublicKey(device trezor.Transport, prompt string) ([]byte, error) {
+	curve := "secp256k1" // from bitcoin
+	coin := "Bitcoin"
+	err := device.Write(&messages.GetPublicKey{
+		AddressN:       nil,
+		EcdsaCurveName: &curve,
+		CoinName:       &coin,
+	})
 	if err != nil {
 		return nil, err
 	}
-	result, err := EncryptWithDevice(device, encrypt, prompt, key, value)
+	for {
+		messageType, message, err := device.Read()
+		if err != nil {
+			return nil, err
+		}
+		if false {
+		} else if messageType == messages.MessageType_MessageType_Failure {
+			var failure messages.Failure
+			proto.Unmarshal(message, &failure)
+			return nil, fmt.Errorf("[%d] %s", failure.Code, *failure.Message)
+		} else if messageType == messages.MessageType_MessageType_PinMatrixRequest {
+			done, value, err := DoPin(prompt)
+			if err != nil {
+				return nil, err
+			}
+			if done {
+				err = device.Write(&messages.PinMatrixAck{Pin: &value})
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err = device.Write(&messages.Cancel{})
+				if err != nil {
+					return nil, err
+				}
+				return nil, nil
+			}
+		} else if messageType == messages.MessageType_MessageType_ButtonRequest {
+			err = device.Write(&messages.ButtonAck{})
+			if err != nil {
+				return nil, err
+			}
+		} else if messageType == messages.MessageType_MessageType_PublicKey {
+			var key messages.PublicKey
+			err = proto.Unmarshal(message, &key)
+			if err != nil {
+				return nil, err
+			}
+			return key.Node.PublicKey, nil
+		} else {
+			return nil, fmt.Errorf("Unexpected response from Trezor [%d]", messageType)
+		}
+	}
+}
+
+func TrezorDo(device trezor.Transport, do func(features messages.Features) error) error {
+	err := device.Open()
+	if err != nil {
+		return err
+	}
+	err = device.Write(&messages.Initialize{})
+	if err != nil {
+		return err
+	}
+	messageType, message, err := device.Read()
+	if err != nil {
+		_ = device.Close()
+		return fmt.Errorf("Failed to query features of Trezor device %s: %s", device.String(), err)
+	}
+	if messageType != messages.MessageType_MessageType_Features {
+		_ = device.Close()
+		return fmt.Errorf("Failed to query features of Trezor device %s: received response type %s", device.String(), messageType)
+	}
+	var features messages.Features
+	err = proto.Unmarshal(message, &features)
+	if err != nil {
+		return fmt.Errorf("Failed to read features of Trezor device at %s: %s", device.String(), err)
+	}
+	err = do(features)
 	if err != nil {
 		device.Close()
-		return nil, err
+		return err
 	}
 	err = device.Close()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return result, nil
+	return nil
 }
