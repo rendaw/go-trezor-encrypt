@@ -1,4 +1,4 @@
-package trezor_encryption
+package trezor_encrypt
 
 import (
 	"encoding/binary"
@@ -15,6 +15,7 @@ import (
 
 const space = 4
 
+//Show a confirmation dialog
 func DoCheck(message string, okayText string, cancelText string) (bool, error) {
 	okay := false
 
@@ -121,6 +122,7 @@ func DoCheck(message string, okayText string, cancelText string) (bool, error) {
 	return okay, nil
 }
 
+// Get a pin from a user.  You shouldn't need to use this directly - the Encrypt* functions will invoke it themselves.
 func DoPin(message string) (bool, string, error) {
 	dontFlash := false
 
@@ -318,6 +320,12 @@ func DoPin(message string) (bool, string, error) {
 	return _done, value, nil
 }
 
+// Encrypt or decrypt the specified bytes with the Trezor device.  The prompt message is shown to the user on their
+// computer.  The key is the message displayed on the Trezor pin screen and is factored into the encryption, so you
+// must use the same key when decrypting. value is the data to encrypt/decrypt.
+//
+// For compatibility with other Trezor software - the data to encrypt is prepended with its length (4 bytes) and padded
+// to a length multiple of 16.  Additionally, the BIP32 key derivation path is 10, 0.
 func EncryptWithDevice(device trezor.Transport, encrypt bool, prompt string, key string, value []byte) ([]byte, error) {
 	{
 		device.Write(&messages.Initialize{})
@@ -389,16 +397,29 @@ func EncryptWithDevice(device trezor.Transport, encrypt bool, prompt string, key
 	}
 }
 
+// See the documentation for EncryptWithDevice.  This helper method automatically uses the first detected Trezor device.
 func Encrypt(encrypt bool, prompt string, key string, value []byte) ([]byte, error) {
-	devices, err := trezor.Enumerate()
-	if err != nil {
-		return nil, err
-	}
-	if len(devices) == 0 {
-		return nil, fmt.Errorf("Couldn't find any Trezor devices")
+	var devices []*trezor.HidTransport
+	for {
+		var err error
+		devices, err = trezor.Enumerate()
+		if err != nil {
+			return nil, err
+		}
+		if len(devices) == 0 {
+			okay, err := DoCheck("Couldn't find any Trezor devices", "Retry", "Cancel")
+			if err != nil {
+				return nil, err
+			}
+			if !okay {
+				return nil, fmt.Errorf("Canceled by user")
+			}
+		} else {
+			break
+		}
 	}
 	device := devices[0]
-	err = device.Open()
+	err := device.Open()
 	if err != nil {
 		return nil, err
 	}
