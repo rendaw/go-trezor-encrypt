@@ -1,3 +1,4 @@
+// Encrypt and decrypt things with Trezor
 package trezor_encrypt
 
 import (
