@@ -3,6 +3,7 @@ package trezor_encrypt
 import (
 	"encoding/binary"
 	"fmt"
+	"os"
 
 	"github.com/rendaw/go-trezor"
 	"github.com/rendaw/go-trezor/messages"
@@ -124,7 +125,15 @@ func DoCheck(message string, okayText string, cancelText string) (bool, error) {
 
 // Get a pin from a user.  You shouldn't need to use this directly - the Encrypt* functions will invoke it themselves.
 func DoPin(message string) (bool, string, error) {
-	dontFlash := false
+	var dontFlash bool
+	{
+		flashEnv, found := os.LookupEnv("TREZOR_ENCRYPT_NOFLASH")
+		if found {
+			dontFlash = flashEnv == "1"
+		} else {
+			dontFlash = false
+		}
+	}
 
 	value := ""
 	_done := false
